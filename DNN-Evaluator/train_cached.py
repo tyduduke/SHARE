@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""
-SHARE DNN Training Script (cached features)
 
-Trains the SLAM error predictor using pre-extracted .npz cache files.
-Does not require pyslam or the SenseTime dataset to be installed at
-training time — only the cache directory is needed.
-
-Usage
------
-python train_cached.py \
-  --data_root /path/to/dataset \
-  --cache_dir  cached_features  \
-  --sequences A0 A1 A2 A3 A4 A5 A6 A7 \
-  --scenes    Scene1 Scene2 Scene3 Scene4 Scene5 Scene6 \
-  --epochs 20 \
-  --output_dir results
-"""
 
 import os
 import argparse
