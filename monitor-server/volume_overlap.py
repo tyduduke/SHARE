@@ -1,23 +1,5 @@
 #!/usr/bin/env python3
-"""
-Volume Overlap Calculator
 
-Computes the camera frustum intersection volume between pairs of agents
-using pose-only data (6-DoF position + quaternion), as described in
-SHARE paper §4.4.1.
-
-The overlap volume V_overlap and union volume V_union are returned in m³.
-The caller (monitoring_server.py) uses V_overlap directly in the paper's
-skip-probability formula (Eq. 6):
-
-    P_skip = max(0, 1 - alpha_m * V_new / V_bar)
-
-where V_new is the current pairwise overlap volume and V_bar is the
-historical mean from completed merge operations.
-
-Note: the IoU ratio (V_overlap / V_union) is also returned for logging,
-but the P_skip formula uses absolute volumes, not the ratio.
-"""
 
 import numpy as np
 import logging
