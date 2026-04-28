@@ -1,34 +1,5 @@
 #!/usr/bin/env python3
-"""
-ViconLogger.py — Multi-Object Vicon Trajectory Logger
 
-Subscribes to Vicon ROS topics for a list of tracked objects and writes
-their ground-truth poses to CSV files.  Collection is controlled remotely
-via UDP commands broadcast by server.py.
-
-For each tracked object ``<Obj>`` the node subscribes to:
-    /vicon/<Obj>/<Obj>  (geometry_msgs/TransformStamped)
-
-Each CSV row has the format:
-    timestamp  tx  ty  tz  qx  qy  qz  qw
-where ``timestamp`` is the ROS header stamp in seconds (float, nanosecond
-precision) and the translation and rotation are in Vicon's world frame.
-
-UDP control protocol  (port configurable via --udp-port, default 10000):
-    ``Start Collection: ['Obj1', 'Obj2', ...]``
-        Begin logging for the named objects.  If logging is already active,
-        the current session is stopped cleanly before starting a new one.
-    ``End Collection``
-        Flush and close all open CSV files.
-
-Output files are written to ``--output-dir`` (default ./vicon_trajectory_logs)
-as  ``<ObjectName>_<YYYY-MM-DD_HH-MM-SS>.csv``.
-
-Usage
------
-    python3 ViconLogger.py [--output-dir ./vicon_trajectory_logs]
-                           [--udp-port 10000]
-"""
 
 import argparse
 import os
