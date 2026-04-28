@@ -1,31 +1,4 @@
 #!/usr/bin/env python3
-"""
-SHARE DNN SLAM Error Predictor — Shared Model Definition
-
-Implements the three-branch architecture described in paper §4.2.1:
-
-  Visual branch:
-    MobileNetV2 backbone (pretrained on ImageNet, classification head removed)
-    → Global Average Pooling  → 1280-dim
-    → FC(1280 → 64) + ReLU   → 64-dim        ← paper: "1 fully connected layer"
-    → LayerNorm(64)           → 64-dim        ← paper: "layer normalization"
-
-  PSD branch:
-    Conv2d(3→8,  k=3, stride=2) + ReLU
-    Conv2d(8→16, k=3, stride=2) + ReLU        ← paper: "8 filters … followed by 16"
-    → Global Average Pooling                   → 16-dim
-
-  Scalar branch:
-    FC(8 → 16) + ReLU                          → 16-dim  ← paper: "8-element input"
-
-  Fusion:
-    Concatenate [64, 16, 16] = 96-dim
-    FC(96 → 64) + ReLU
-    FC(64 → 1)                                 ← single scalar: predicted SLAM error
-
-This file is the single source of truth for the model architecture.
-All training and evaluation scripts import SLAMErrorPredictor from here.
-"""
 
 import torch
 import torch.nn as nn
