@@ -22,47 +22,6 @@ SHARE is a multi-agent SLAM system that optimises the quality of experience (QoE
 
 ## System Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Edge Server                             │
-│                                                                 │
-│   ┌──────────────────┐       ┌───────────────────────────────┐  │
-│   │  COVINS-G Backend│◄─────►│      Monitoring Server        │  │
-│   │  (map_be.cpp)    │ UDP   │  (monitoring_server.py /      │  │
-│   │                  │       │   qoe_model.py /              │  │
-│   │  - Map merging   │       │   volume_overlap.py /         │  │
-│   │  - Loop closure  │       │   main.py)                    │  │
-│   └──────────────────┘       │                               │  │
-│                              │  - QoE computation (§4.2)     │  │
-│                              │  - PID scheduler   (§4.3)     │  │
-│                              │  - Merge approval  (§4.4)     │  │
-│                              └───────────────────────────────┘  │
-└───────────┬─────────────────────────────────────────────────────┘
-            │ TCP/UDP
-    ┌────────┴────────────────────────────────────┐
-    │                                             │
-    ▼                                             ▼
-┌─────────────────────────┐        ┌────────────────────────────┐
-│  Human Agent (AR)       │        │     Robot Agent            │
-│                         │        │                            │
-│  COVINS-G frontend      │        │  COVINS-G frontend         │
-│  (ORB-SLAM3 / RealSense)│        │  (ORB-SLAM3 / RealSense)  │
-│                         │        │                            │
-│  DNN Evaluator          │        │  DNN Evaluator             │
-│  (python_evaluator_     │        │  (python_evaluator_        │
-│   ondevice.py)          │        │   ondevice.py)             │
-└─────────────────────────┘        └────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│              Dataset Synthesis Pipeline (offline)               │
-│                                                                 │
-│  Vicon Server          Unity Emulator       DNN Training        │
-│  (server.py /          (controller_v3.cs)   (train_cached.py /  │
-│   ViconLogger.py /                           train.py /         │
-│   listener_time.py)                          eval_mape.py)      │
-└─────────────────────────────────────────────────────────────────┘
-```
-
 Each subsystem maps to a directory in this repository:
 
 | Directory | Module | Runs On |
