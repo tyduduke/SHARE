@@ -1,25 +1,5 @@
 #!/usr/bin/env python3
-"""
-SHARE DNN Training Script (with on-the-fly pyslam feature extraction)
 
-Extracts features from raw dataset images using pyslam, caches them as
-.npz files, then trains the SLAMErrorPredictor.
-
-Usage
------
-# Recommended: pre-generate cache with pyslam_integration.py, then use
-# train_cached.py (faster, no pyslam dependency at training time).
-
-# On-the-fly extraction (requires pyslam installation):
-python train.py \
-  --data_root   /path/to/dataset \
-  --pyslam_config config/orb_tum.yaml \
-  --sequences   A0 A1 A2 A3 A4 A5 A6 A7 \
-  --scenes      Scene1 Scene2 Scene3 Scene4 Scene5 Scene6 \
-  --cache_dir   cached_features \
-  --epochs      20 \
-  --output_dir  results
-"""
 
 import os
 import argparse
