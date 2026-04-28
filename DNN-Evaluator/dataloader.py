@@ -1,16 +1,5 @@
 #!/usr/bin/env python3
-"""
-Dataset loader for SLAM error prediction training.
 
-Loads pre-cached .npz feature files produced by pyslam_integration.py.
-Each .npz file contains:
-    psd      -- Point Spatial Distribution matrix  (H, W, 3)  numpy float32
-    features -- 8 scalar features                  (8,)        numpy float32
-    error    -- SLAM error label                   scalar      numpy float32
-
-Raw data loading (without cache) is not implemented here; run
-pyslam_integration.py first to generate the cache directory.
-"""
 
 import os
 import glob
