@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""
-SHARE Monitoring Server
-
-Edge-server component that implements:
-  1. Agent-specific QoE modeling  (paper §4.2)
-  2. PID scheduler for per-agent frame transmission rate  (paper §4.3)
-  3. Visual overlap-based map merge approval  (paper §4.4, Eq. 6)
-
-Key design decisions aligned with the paper:
-  - AR users prioritised via different QoE model (d0 = 20 ms threshold).
-  - PID output maps directly to frame-rate resource via R(t) = R_prev + u(t)
-    clipped to [R_min, R_max] (Algorithm 1, NOT a sigmoid transform).
-  - Map merge skip probability: P_skip = max(0, 1 - alpha_m * V_new / V_bar)
-    where V_bar is the running mean of overlap volumes from COMPLETED merges
-    (paper §4.4.2, Eq. 6).
-"""
 
 import socket
 import struct
