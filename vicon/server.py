@@ -1,39 +1,5 @@
 #!/usr/bin/env python3
-"""
-server.py — SHARE Vicon Synchronisation and Collection Control Server
 
-Manages the full data-collection lifecycle for a multi-device SLAM study:
-
-1. Device registration
-   Each agent device sends a UDP registration message in the form
-   ``<DeviceName>:<DeviceIP>`` to SYNC_PORT.  The server records the device
-   and starts a per-device clock-synchronisation thread.
-
-2. Clock synchronisation
-   For each registered device the server streams Vicon ROS timestamps (read
-   from listener_time.py) over UDP at SYNC_SEND_INTERVAL seconds for
-   SYNC_DURATION seconds.  After the burst ends the device is marked
-   "synced" and can compute the mean clock offset against its local clock.
-
-3. Collection control
-   The operator issues console commands:
-     ``begin`` — broadcasts a start-collection message to all synced devices
-                 and triggers Vicon logging (ViconLogger.py via UDP).
-     ``end``   — broadcasts a stop-collection message and stops logging.
-     ``exit``  — shuts down the server.
-
-Network layout (all ports are configurable via CLI):
-    SYNC_PORT       (default 6666)  UDP  device → server registration
-    DEVICE_PORT     (default 8888)  UDP  server → device sync timestamps
-    VICON_CTRL_PORT (default 10000) UDP  server → ViconLogger commands
-    SENSOR_PORT     (default 11111) UDP  server → SensorCollector commands
-
-Vicon timestamps come from listener_time.py, launched as a subprocess.
-
-Usage
------
-    python3 server.py [--host 0.0.0.0] [--sync-port 6666]
-"""
 
 import argparse
 import copy
