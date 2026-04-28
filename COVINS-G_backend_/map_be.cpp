@@ -1,26 +1,3 @@
-/**
-* This file is part of COVINS, modified for the SHARE system.
-*
-* Copyright (C) 2018-2021 Patrik Schmuck / Vision for Robotics Lab
-* (ETH Zurich) <collaborative (dot) slam (at) gmail (dot) com>
-* For more information see <https://github.com/VIS4ROB-lab/covins>
-*
-* COVINS is free software: you can redistribute it and/or modify
-* it under the terms of the GNU General Public License as published by
-* the Free Software Foundation, either version 3 of the license, or
-* (at your option) any later version.
-*
-* SHARE Modifications:
-* - SendMergeSignal(): notify the Python monitoring server of merge events.
-* - RequestMergeApproval(): request P_skip decision before performing a merge.
-*   Implements the selective map merging described in paper §4.4.2, Eq. 6.
-*   A merge is skipped when the monitoring server returns approved=false.
-*
-* CONFIGURATION: adjust the three #define constants below to match your
-* deployment.  The monitoring server (main.py) must be running BEFORE
-* COVINS-G is launched.
-*/
-
 #include "covins_backend/map_be.hpp"
 
 // C++
