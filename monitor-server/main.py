@@ -1,21 +1,5 @@
 #!/usr/bin/env python3
-"""
-SHARE Monitoring Server — Entry Point
 
-Examples
---------
-# Full SHARE system (QoE + PID + merge approval)
-python main.py --baseline-mode full --clock-offset-ms 97.38 --alpha-m 0.5
-
-# Baseline 1: fixed 30 % frame drop, no PID
-python main.py --baseline-mode monitor_only --fixed-drop-rate 0.3
-
-# Baseline 2: linear latency-based drop (Linear Baseline in paper §6.3)
-python main.py --baseline-mode delay_linear --delay-threshold 20 --max-delay 1000
-
-# Baseline 3: equal QoE for all agents (Equal Baseline in paper §6.3)
-python main.py --baseline-mode same_qoe
-"""
 
 import argparse
 import signal
