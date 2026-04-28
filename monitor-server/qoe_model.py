@@ -1,24 +1,4 @@
 #!/usr/bin/env python3
-"""
-QoE-QoS Model Implementation
-
-Implementation of the agent-specific QoE models from the SHARE paper (Eq. 1).
-
-For AR/human agents:
-    QoE_h = alpha_h * exp(-beta_h * max(0, d - d0)) * (1 - exp(-gamma_h * a))
-    where:
-        P_i = max(0, d - d0)  -- latency penalty, d0 = 20 ms AR threshold
-        Q_i = a               -- accuracy contribution (diminishing returns)
-
-For robot agents:
-    QoE_r = alpha_r * exp(-beta_r * max(0, a_min - a)) * (1 - exp(-gamma_r * (1/(d+theta))))
-    where:
-        P_i = max(0, a_min - a)     -- accuracy penalty
-        Q_i = (d + theta)^{-1}      -- latency contribution (diminishing returns)
-
-alpha is set automatically so that the maximum achievable QoE equals 1.0,
-ensuring the QoE target of 0.9 is always reachable.
-"""
 
 import numpy as np
 import logging
