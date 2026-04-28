@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
-"""
-listener_time.py — Vicon ROS Timestamp Relay
 
-Subscribes to a Vicon wand topic and writes each timestamp to stdout, one
-per line, so that the parent process (server.py) can read them via a
-subprocess pipe.
-
-This script is launched as a subprocess by server.py and should NOT be
-started manually in normal operation.
-
-ROS topic consumed:
-    /vicon/wand/wand  (geometry_msgs/TransformStamped)
-
-stdout format (one line per message):
-    <seconds>.<nanoseconds as fractional part>
-    e.g.  1749911387.520850
-
-Usage (standalone, for debugging):
-    python3 listener_time.py [--topic /vicon/wand/wand]
-"""
 
 import argparse
 import sys
