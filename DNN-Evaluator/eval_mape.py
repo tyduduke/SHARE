@@ -1,18 +1,4 @@
-#!/usr/bin/env python3
-"""
-SHARE DNN Evaluation Script
 
-Loads a trained SLAMErrorPredictor checkpoint and evaluates it with MAPE
-and additional metrics on a cached feature dataset.
-
-Usage
------
-python eval_mape.py \
-  --model_path results/best_model.pth \
-  --data_root  /path/to/dataset \
-  --cache_dir  cached_features \
-  --output_dir evaluation_results
-"""
 
 import os
 import argparse
