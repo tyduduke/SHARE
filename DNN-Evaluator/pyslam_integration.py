@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""
-pyslam Feature Extractor for SHARE DNN Training Data Generation
-
-Processes raw dataset images and IMU data through pyslam to extract:
-  - Camera poses
-  - PSD (Point Spatial Distribution) matrices
-  - 8 scalar image/tracking quality features
-  - SLAM error relative to Vicon ground truth
-
-Requires pyslam to be installed and PYSLAM_PATH to be set.
-Set the environment variable before running:
-    export PYSLAM_PATH=/path/to/pyslam
-
-This script is only needed to build the .npz cache from raw data.
-If cache files are already present, use train_cached.py directly.
-"""
 
 import os
 import sys
