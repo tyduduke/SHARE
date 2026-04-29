@@ -132,15 +132,24 @@ chmod +x src/covins/install_file.sh
 
 > **Important:** If the build fails at any step, execute the script's commands one by one manually rather than re-running the script from the top. Running the install script multiple times on the same workspace without a clean build in between can leave the workspace in an inconsistent state.
 
+> **Note on `CMAKE_BUILD_TYPE`:** Pay attention to the `CMAKE_BUILD_TYPE` set in the catkin config above (`RelWithDebInfo`). In particular, building parts of the code with `march=native` can cause problems on some machines. Do not override this flag without careful consideration.
+
 > **Note on Eigen:** The script pins a specific Eigen version via the `eigen_catkin` package and redirects all Eigen dependencies to it. This prevents the fatal linking errors that arise when code is compiled against multiple Eigen versions simultaneously.
+
+> **Build failure troubleshooting:** If the build process of COVINS-G or ORB-SLAM3 fails, make sure you have correctly sourced the workspace before building, and verify that the libraries in the third-party folders — in particular DBoW2 and g2o — have been built correctly before attempting to build the main packages.
+
+The COVINS-G **backend only needs to be built on the edge server**. For agent devices, building just the frontend is sufficient. The COVINS-G ROS frontend wrapper (`-f` flag) is useful when you want to use a RealSense T265 tracking camera or any arbitrary VIO/stereo frontend without modifying the frontend code.
 
 The full build (backend + frontend) is the default. To build only specific components:
 
 ```bash
-# ROS frontend wrapper only (agent devices)
+# Full build — backend + frontend (edge server)
+./src/covins/install_file.sh 8
+
+# ROS frontend wrapper only — for agent devices using arbitrary VIO/tracking cameras
 ./src/covins/install_file.sh -f 8
 
-# ORB-SLAM3 only, no backend (agent devices)
+# ORB-SLAM3 only, no backend — for agent devices using ORB-SLAM3 directly
 ./src/covins/install_file.sh -o 8
 ```
 
@@ -182,11 +191,19 @@ catkin build cv_bridge
 catkin build ORB_SLAM3
 ```
 
-Verify correct linkage (should show only `libopencv_core.so.3.4`):
+Verify correct linkage for `cv_bridge` (should show only `libopencv_core.so.3.4`):
 
 ```bash
 ldd ~/covins_ws/devel/lib/libcv_bridge.so | grep opencv_core
 ```
+
+Verify correct linkage for the ORB-SLAM3 ROS node itself (should also list only `libopencv_core.so.3.4`):
+
+```bash
+ldd ~/covins_ws/src/covins/orb_slam3/Examples/ROS/ORB_SLAM3/Mono_Inertial | grep opencv_core
+```
+
+If either check lists a version other than `libopencv_core.so.3.4`, there is an OpenCV linkage conflict that will cause runtime crashes. Resolve it by re-checking the `CMakeLists.txt` edits above before proceeding.
 
 ### Configuring the Server IP
 
@@ -281,14 +298,36 @@ cd pyslam
 ./install_all.sh    # creates a Python virtual environment named 'pyslam'
 ```
 
-The script automatically uses conda if available, or venv otherwise. An internet connection is required and the build takes a considerable amount of time. Core requirements installed by the script:
+The install script creates a single Python environment named `pyslam` that hosts all supported components. On Ubuntu, three environment managers are supported:
+
+**With venv (recommended):**
+The default path when conda is not detected. The script installs and configures a venv automatically. No additional steps are needed before running `./install_all.sh`.
+
+**With conda:**
+If conda is available on the system, the script automatically uses it to create and populate the `pyslam` environment. After installation, activate with:
+```bash
+conda activate pyslam
+```
+instead of using `pyenv-activate.sh`.
+
+**With pixi (experimental):**
+Run `pixi shell` in the root folder of the pyslam repository before launching `./install_all.sh`. This option may encounter issues with building and linking on some machines and is not recommended for production use.
+
+An internet connection is required and the build takes a considerable amount of time. Core requirements installed by the script:
 
 - Python 3.11.9
-- OpenCV ≥ 4.10 (with non-free modules enabled)
+- OpenCV ≥ 4.10 (with non-free modules enabled — handled automatically by the install script)
 - PyTorch ≥ 2.3.1
 - Kornia ≥ 0.7.3
 
-In each new terminal where pyslam is needed, activate the environment first:
+After installation, verify that the correct OpenCV version with non-free modules was installed:
+
+```bash
+. pyenv-activate.sh           # activate the pyslam environment (venv path)
+./scripts/opencv_check.py     # prints the installed OpenCV version and module list
+```
+
+In each new terminal where pyslam is needed, activate the environment first (venv path):
 
 ```bash
 . /path/to/pyslam/pyenv-activate.sh
@@ -301,6 +340,8 @@ export PYSLAM_PATH=/path/to/pyslam
 ```
 
 SHARE uses pyslam's ORB detector with DBoW3 loop closure in monocular mode. The configuration YAML files are in pyslam's `settings/` folder. Pass the path to your ORB config via `--pyslam_config` when calling `train.py`.
+
+> **Troubleshooting:** If you encounter errors during installation or at runtime, check `docs/TROUBLESHOOTING.md` inside the pyslam repository before opening an issue. Common causes include missing CUDA toolkit, conflicting conda environments, and missing submodules (ensure `git clone --recursive` was used).
 
 If cached `.npz` files are already available, pyslam is not needed — use `train_cached.py` directly.
 
