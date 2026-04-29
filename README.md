@@ -38,6 +38,8 @@ Each subsystem maps to a directory in this repository:
 
 All server-side components and the COVINS-G frontend require **Ubuntu 20.04** and **ROS Noetic**. The steps below follow the [COVINS-G installation guide](https://github.com/VIS4ROB-lab/covins).
 
+> **Resource requirement:** Building COVINS-G is memory-intensive. Ensure the build machine has at least 16 GB RAM. If building in a virtual machine, allocate at least 16 GB RAM and 10 GB swap. Instructions for changing swap size can be found [here](https://www.digitalocean.com/community/tutorials/how-to-add-swap-space-on-ubuntu-20-04).
+
 ### ROS Noetic
 
 ```bash
@@ -82,8 +84,25 @@ catkin config --cmake-args -DCMAKE_BUILD_TYPE=RelWithDebInfo
 ## 1. COVINS-G Backend
 
 **Module:** `covins_backend/map_be.cpp`  
-**Runs on:** Edge server  
-**Replaces:** `~/covins_ws/src/covins/covins_backend/src/covins_backend/map_be.cpp`
+**Runs on:** Edge server
+
+### What this file is and what was changed
+
+`map_be.cpp` is a **direct modification of the original COVINS-G source file** located at:
+
+```
+~/covins_ws/src/covins/covins_backend/src/covins_backend/map_be.cpp
+```
+
+The SHARE version of this file must **replace** the original after COVINS-G is built. It is not a new file or a plugin — it modifies the existing COVINS-G map manager (`MapManager` class) in place.
+
+Two capabilities were added to the original COVINS-G `PerformMerge()` function:
+
+1. **Merge event signalling:** Before and after every map merge, the patched `PerformMerge()` sends a UDP notification to the monitoring server (`SendMergeSignal`). The `merge_complete` signal is how the monitoring server maintains its historical overlap volume buffer (V_bar) for the P_skip formula. Without this signal, the monitoring server cannot compute a meaningful merge approval decision.
+
+2. **Merge approval gating:** Before executing any merge, the patched `PerformMerge()` calls `RequestMergeApproval()`, which sends a UDP request to the monitoring server and waits for a binary approved/denied response. The monitoring server applies the selective merge criterion (paper §4.4.2, Eq. 6, `P_skip = max(0, 1 - α_m · V_new / V_bar)`) and returns its decision. If denied, the merge request is silently discarded — this is the intended selective merging behaviour. If the monitoring server is unreachable or times out, the default is to approve (fail-safe).
+
+No other parts of the COVINS-G codebase were modified. No `CMakeLists.txt` changes are required. All new networking code uses standard POSIX headers (`sys/socket.h`, `poll.h`, `arpa/inet.h`) that are available on any Linux system without additional packages.
 
 ### Installing COVINS-G
 
@@ -131,9 +150,17 @@ After the build completes, source the workspace:
 source ~/covins_ws/devel/setup.bash
 ```
 
+### Configuring the COVINS-G Backend Type
+
+COVINS-G supports two backend modes: `COVINS` (uses map points, supports global bundle adjustment) and `COVINS_G` (generic, works with any frontend, no map points in backend). SHARE requires `COVINS_G`. Set this in the backend configuration file at `~/covins_ws/src/covins/covins_backend/config/config_backend.yaml`:
+
+```yaml
+placerec.type: COVINS_G
+```
+
 ### ROS Support for the ORB-SLAM3 Frontend
 
-To pass live RealSense sensor data through ROS, build ORB-SLAM3 with ROS support. First install `cv_bridge` against the correct OpenCV version:
+To pass live sensor data through ROS, build ORB-SLAM3 with ROS support. First install `cv_bridge` against the correct OpenCV version:
 
 ```bash
 cd ~/covins_ws/src
@@ -171,14 +198,14 @@ sys.server_ip: "<edge-server-ip>"
 
 ### Applying the SHARE Patch
 
-Replace `map_be.cpp` with the SHARE version:
+After COVINS-G is fully built, replace the original `map_be.cpp` with the SHARE-modified version. The file in this repository (`covins_backend/map_be.cpp`) must overwrite the original at its exact location inside the COVINS-G workspace:
 
 ```bash
 cp covins_backend/map_be.cpp \
    ~/covins_ws/src/covins/covins_backend/src/covins_backend/map_be.cpp
 ```
 
-Edit the four `#define` constants near the top of the file to match your network:
+Edit the four `#define` constants near the top of the file to match your network. `SHARE_MONITOR_IP` must be the IP of the machine running `main.py`:
 
 ```cpp
 #define SHARE_MONITOR_IP                "<edge-server-ip>"
@@ -187,7 +214,7 @@ Edit the four `#define` constants near the top of the file to match your network
 #define SHARE_MERGE_APPROVAL_TIMEOUT_SEC 1.0
 ```
 
-Rebuild the backend — no `CMakeLists.txt` changes are required:
+Rebuild the backend. Only `covins_backend` needs to be rebuilt — no other packages are affected:
 
 ```bash
 cd ~/covins_ws
@@ -208,6 +235,8 @@ source devel/setup.bash
 
 **Module:** `dnn_evaluator/`  
 **Runs on:** Each agent device (live inference); training workstation (offline)
+
+The DNN evaluator predicts per-keyframe SLAM tracking error from three input modalities: visual keyframe images, Point Spatial Distribution (PSD) matrices, and scalar tracking-quality features. The predicted error is used as the accuracy term in the QoE model (paper §4.2). At runtime, the inference client `python_evaluator_ondevice.py` (located in the COVINS frontend source directory at `~/covins_ws/src/covins/covins_frontend/src/`) loads the trained model checkpoint and sends per-keyframe error estimates to the monitoring server over TCP.
 
 | File | Role |
 |---|---|
@@ -298,6 +327,16 @@ python3 train.py \
   --output_dir    results
 ```
 
+Additional training arguments for both scripts:
+
+| Argument | Default | Description |
+|---|---|---|
+| `--batch_size` | `16` | Training batch size |
+| `--lr` | `0.001` | Initial learning rate (Adam optimizer) |
+| `--device` | `cuda` | `cuda` or `cpu` |
+| `--test_size` | `0.3` | Fraction of data held out for test + validation |
+| `--val_size` | `0.5` | Fraction of the held-out set used for validation |
+
 ### Evaluation
 
 ```bash
@@ -308,7 +347,17 @@ python3 eval_mape.py \
   --output_dir evaluation_results
 ```
 
-The trained `best_model.pth` is loaded by `python_evaluator_ondevice.py` on each agent device during live operation.
+Additional evaluation arguments:
+
+| Argument | Default | Description |
+|---|---|---|
+| `--eval_on` | `test` | Which split to evaluate: `train`, `val`, `test`, or `all` |
+| `--batch_size` | `16` | Inference batch size |
+| `--device` | `cuda` | `cuda` or `cpu` |
+| `--test_size` | `0.3` | Must match the value used during training |
+| `--val_size` | `0.5` | Must match the value used during training |
+
+The trained `best_model.pth` is loaded by `python_evaluator_ondevice.py` on each agent device during live operation. This inference client connects to the monitoring server over TCP on the agent's assigned evaluation port (9997, 9998, or 9999) and sends one error estimate per keyframe.
 
 ---
 
@@ -332,14 +381,69 @@ pip install numpy scipy
 
 ### Configuration
 
+The monitoring server exposes all parameters as CLI arguments. The most important are listed below. For the full list, run `python3 main.py --help`.
+
+**Mode and baseline selection:**
+
 | Argument | Default | Description |
 |---|---|---|
-| `--baseline-mode` | `full` | `full` / `monitor_only` / `delay_linear` / `same_qoe` |
-| `--clock-offset-ms` | `0.0` | Constant NTP clock correction (ms) subtracted from raw RTT |
-| `--alpha-m` | `0.5` | α_m in P_skip = max(0, 1 − α_m · V_new / V_bar) |
-| `--human1-eval-port` | `9997` | TCP port for Human Agent 1 evaluation messages |
-| `--human2-eval-port` | `9998` | TCP port for Human Agent 2 evaluation messages |
-| `--robot-eval-port` | `9999` | TCP port for Robot evaluation messages |
+| `--baseline-mode` | `full` | `full` (SHARE) / `monitor_only` (fixed drop) / `delay_linear` (linear latency drop) / `same_qoe` (equal QoE for all agents) |
+| `--fixed-drop-rate` | `0.5` | Drop rate used when `--baseline-mode monitor_only` |
+| `--delay-threshold` | `20.0` | Latency threshold (ms) below which no frames are dropped in `delay_linear` mode |
+| `--max-delay` | `1000.0` | Latency (ms) at which drop rate reaches 1.0 in `delay_linear` mode |
+
+**Network:**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--host` | `0.0.0.0` | Listening address |
+| `--human1-eval-port` | `9997` | TCP port for Human Agent 1 evaluation |
+| `--human2-eval-port` | `9998` | TCP port for Human Agent 2 evaluation |
+| `--robot-eval-port` | `9999` | TCP port for Robot evaluation |
+
+**Clock correction:**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--clock-offset-ms` | `0.0` | Constant NTP clock correction (ms) subtracted from raw RTT. Measure via NTP analysis between agent and server clocks, then pass the measured value here. |
+
+**Merge approval:**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--alpha-m` | `0.5` | α_m in P_skip = max(0, 1 − α_m · V_new / V_bar). Higher value → more merges approved. |
+
+**QoE targets (per agent):**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--qoe-target-human1` | `0.9` | QoE target for Human Agent 1 |
+| `--qoe-target-human2` | `0.9` | QoE target for Human Agent 2 |
+| `--qoe-target-robot` | `0.9` | QoE target for Robot |
+
+**PID gains (per agent, paper §4.3 grid-searched values: Kp=0.8, Ki=0.15, Kd=0.2):**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--pid-kp-human1` | `0.8` | Proportional gain for Human Agent 1 |
+| `--pid-ki-human1` | `0.15` | Integral gain for Human Agent 1 |
+| `--pid-kd-human1` | `0.2` | Derivative gain for Human Agent 1 |
+| `--pid-kp-human2` | `0.8` | Proportional gain for Human Agent 2 |
+| `--pid-ki-human2` | `0.15` | Integral gain for Human Agent 2 |
+| `--pid-kd-human2` | `0.2` | Derivative gain for Human Agent 2 |
+| `--pid-kp-robot` | `0.8` | Proportional gain for Robot |
+| `--pid-ki-robot` | `0.15` | Integral gain for Robot |
+| `--pid-kd-robot` | `0.2` | Derivative gain for Robot |
+
+**Frustum overlap parameters:**
+
+| Argument | Default | Description |
+|---|---|---|
+| `--camera-hfov` | `90.0` | Camera horizontal field of view (degrees) |
+| `--camera-vfov` | `60.0` | Camera vertical field of view (degrees) |
+| `--camera-near` | `0.1` | Near clipping plane (metres) |
+| `--camera-far` | `10.0` | Far clipping plane (metres) |
+| `--overlap-resolution` | `0.2` | 3-D grid sampling step δ (metres, paper §4.4.1) |
 
 ### Running
 
@@ -363,7 +467,9 @@ python3 main.py --baseline-mode delay_linear
 | 9997 | TCP | Agent → server | Human Agent 1 evaluation |
 | 9998 | TCP | Agent → server | Human Agent 2 evaluation |
 | 9999 | TCP | Agent → server | Robot evaluation |
-| 6161–6163 | TCP | Agent → server | Pose streams |
+| 6161 | TCP | Agent → server | Robot pose stream |
+| 6162 | TCP | Agent → server | Human Agent 2 pose stream |
+| 6163 | TCP | Agent → server | Human Agent 1 pose stream |
 | 9955 | UDP | COVINS-G → server | Merge event signals |
 | 9956 | UDP | COVINS-G ↔ server | Merge approval |
 
@@ -415,6 +521,16 @@ python3 server.py \
   --sync-port 6666 \
   --vicon-ctrl-port 10000
 ```
+
+All arguments and their defaults:
+
+| Argument | Default | Description |
+|---|---|---|
+| `--sync-port` | `6666` | UDP port for device registration |
+| `--device-port` | `8888` | UDP port on each device that receives sync packets |
+| `--vicon-ctrl-port` | `10000` | UDP port ViconLogger listens on |
+| `--sensor-port` | `11111` | UDP port SensorCollector listens on (if present) |
+| `--pose-cache-timeout` | `5.0` | Seconds before a cached agent pose is considered stale |
 
 ### Collection Control
 
@@ -490,6 +606,8 @@ Assign static IPs to all machines on the same local network. Replace `<server-ip
 sys.server_ip: "<server-ip>"
 ```
 
+Ensure `placerec.type: COVINS_G` is set in `~/covins_ws/src/covins/covins_backend/config/config_backend.yaml` on the edge server (see [Configuring the COVINS-G Backend Type](#configuring-the-covins-g-backend-type)).
+
 ### Step 1 — Edge Server: ROS core
 
 ```bash
@@ -511,12 +629,12 @@ In a new terminal:
 
 ```bash
 cd monitoring_server/
-python3 main.py --clock-offset-ms <measured_ntp_offset>
+python3 main.py --baseline-mode full --clock-offset-ms <measured_ntp_offset>
 ```
 
 ### Step 4 — Human Agent 1: DNN Evaluator
 
-SSH into the first human agent device and navigate to the COVINS frontend source directory:
+SSH into the first human agent device. Navigate to the COVINS frontend source directory (`~/covins_ws/src/covins/covins_frontend/src/`) and run the inference client:
 
 ```bash
 python3 python_evaluator_ondevice.py \
@@ -527,16 +645,18 @@ python3 python_evaluator_ondevice.py \
 
 ### Step 5 — Human Agent 1: COVINS-G Frontend
 
-In a second terminal on the same device with the workspace sourced:
+In a second terminal on the same device with the workspace sourced, launch your sensor driver. For example, with an Intel RealSense camera:
 
 ```bash
 source ~/covins_ws/devel/setup.bash
-roslaunch realsense_ros realsense_launch.launch
+roslaunch realsense_ros <your_sensor_launch_file>.launch
 ```
+
+Replace `<your_sensor_launch_file>` with the launch file appropriate for your sensor and calibration. The COVINS-G frontend will connect to the backend automatically using the server IP set in `config_comm.yaml`.
 
 ### Step 6 — Human Agent 2: DNN Evaluator
 
-SSH into the second human agent device:
+SSH into the second human agent device and run:
 
 ```bash
 python3 python_evaluator_ondevice.py \
@@ -549,12 +669,12 @@ python3 python_evaluator_ondevice.py \
 
 ```bash
 source ~/covins_ws/devel/setup.bash
-roslaunch realsense_ros realsense_launch.launch
+roslaunch realsense_ros <your_sensor_launch_file>.launch
 ```
 
 ### Step 8 — Robot Agent: DNN Evaluator
 
-SSH into the robot and open the LXC Ubuntu 20 container. Inside the container, navigate to the COVINS frontend source directory:
+SSH into the robot and open the LXC Ubuntu 20 container. Inside the container, navigate to `~/covins_ws/src/covins/covins_frontend/src/` and run:
 
 ```bash
 python3 python_evaluator_ondevice.py \
@@ -564,7 +684,7 @@ python3 python_evaluator_ondevice.py \
   --monitor-host <server-ip>
 ```
 
-The `--socket` flag routes evaluation output through a Unix domain socket, required when the robot's SLAM process and evaluator share a container environment.
+The `--socket` flag routes evaluation output through a Unix domain socket, required when the robot's SLAM process and evaluator share a container environment where the SLAM process cannot reach the monitoring server's TCP port directly.
 
 ### Step 9 — Robot Agent: COVINS-G Frontend
 
@@ -572,7 +692,7 @@ In a second terminal in the same container with the workspace sourced:
 
 ```bash
 source ~/covins_ws/devel/setup.bash
-roslaunch realsense_ros realsense_launch.launch
+roslaunch realsense_ros <your_sensor_launch_file>.launch
 ```
 
 ### Step 10 — Verify and Monitor
@@ -588,7 +708,7 @@ SHARE builds on the following open-source projects:
 **COVINS-G** — Generic back-end for collaborative visual-inertial SLAM.  
 Patel, M., Karrer, M., Bänninger, P., and Chli, M. *COVINS-G: A Generic Back-end for Collaborative Visual-Inertial SLAM.* ICRA 2023.  
 Repository: [https://github.com/VIS4ROB-lab/covins](https://github.com/VIS4ROB-lab/covins)  
-The SHARE backend patch modifies COVINS-G source code and is therefore released under the same GNU General Public License v3.0.
+The SHARE patch (`covins_backend/map_be.cpp`) modifies COVINS-G source code and is therefore released under the same GNU General Public License v3.0.
 
 **pyslam** — Open-source, modular, and extensible framework for SLAM.  
 Freda, L. *pySLAM: An Open-Source, Modular, and Extensible Framework for SLAM.* RSS 2025 Workshop: Unifying Visual SLAM.  
