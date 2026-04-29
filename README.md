@@ -610,12 +610,11 @@ Once all agent devices have registered and finished synchronisation, issue comma
 
 > **Virtual scene not included:** The virtual environments (warehouse and fire station scenes) used for dataset synthesis constitute a Unity project exceeding 10 GB and cannot be conveniently distributed in this repository. The scripts in `unity_emulator/` are provided as-is and require the scene project to be built or imported separately before they can be used.
 
-The `unity_emulator/` directory contains three C# scripts with distinct roles:
+The `unity_emulator/` directory contains two C# scripts with distinct roles:
 
 | File | Role |
 |---|---|
 | `controller_v3.cs` | Production trajectory replay controller for dataset generation |
-| `controller_v2.cs` | Earlier per-agent trajectory controller with interactive FPS mode |
 | `frame_extractor.cs` | Scene verification utility for testing render quality during setup |
 
 ### Requirements
@@ -660,36 +659,10 @@ This is the primary script used for dataset generation. It reads recorded field-
 | `O` | Recalculate relative pose offset (only relevant when `useRelativePositioning` is true) |
 | `T` | Toggle relative positioning mode |
 
-### controller_v2.cs — Per-Agent Interactive and Replay Controller
-
-This is an earlier agent-specific controller for the human agent. It is kept in the repository as a reference implementation. It operates in two modes, selected by the **Use Controlled Translations** (`useControlledTranslations`) toggle in the Inspector:
-
-**Interactive FPS mode** (`useControlledTranslations = false`):  
-Standard first-person controller driven by WASD keys and mouse look. Includes sprint (`Left Shift`), jump (`Space`), and a head-bob effect. This mode is used to manually navigate the virtual scene for scene verification and framing checks.
-
-**Trajectory replay mode** (`useControlledTranslations = true`):  
-Reads a `.txt` TextAsset assigned in the Inspector, parses it as a sequence of `(timestamp, quaternion, position)` entries, and drives the camera along the trajectory using Slerp/Lerp interpolation timed to the recorded timestamps. WASD and mouse are disabled in this mode. Frames are saved to `pathToSaveData/frames/` numbered by frame index (e.g. `0.png`, `1.png`, ...).
-
-This script also applies per-agent layer culling: the human camera's culling mask excludes the `Human2` and `Robot` layers so each agent camera renders only its own view without seeing the other agents' scene objects.
-
-Inspector fields specific to trajectory replay mode:
-
-| Field | Description |
-|---|---|
-| `txtFile` | TextAsset containing the recorded pose sequence |
-| `pathToSaveData` | Absolute directory path where `frames/` will be created |
-| `saveCameraFrames` | Enable/disable frame saving during replay |
-| `startingCoordinateOffset` | World-space offset applied to all positions |
-| `useHighRes` | Enable high-resolution capture via RenderTexture |
-| `captureResMultiplier` | Resolution multiplier when `useHighRes` is true |
-| `useCustomRes` | Use fixed custom resolution instead of a multiplier |
-| `customCaptureWidth / Height` | Custom resolution dimensions |
-
-> **Note:** `controller_v2.cs` uses `float` for timestamps, which limits precision for large Unix timestamps. For production dataset generation use `controller_v3.cs`, which parses timestamps as `double`. Frame filenames in v2 are sequential integers (`0.png`, `1.png`, ...) rather than the floating-point timestamps required by `pyslam_integration.py`.
 
 ### frame_extractor.cs — Scene Verification Utility
 
-This is a lightweight utility for verifying scene render quality during initial setup. It is **not** used for trajectory replay or dataset generation. Attach it to a camera in the scene and use it to check that HDRP lighting, asset placement, and post-processing look correct before running the full trajectory capture.
+This is a lightweight utility for verifying scene render quality during initial setup and manual scene inspection. It is **not** used for trajectory replay or dataset generation. Attach it to a camera in the scene and use it to check that HDRP lighting, asset placement, and post-processing look correct before running the full trajectory capture.
 
 **How it works:** The script detects camera movement by comparing position and rotation each frame. When the camera has been stationary for `movementStopDelay` seconds (default 0.5 s), it automatically captures a burst of `maxFramesToCapture` frames (default 3) and saves them to `Application.dataPath/<saveDirectory>/frame_XXXX.png`.
 
