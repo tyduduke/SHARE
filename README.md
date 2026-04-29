@@ -605,35 +605,107 @@ Once all agent devices have registered and finished synchronisation, issue comma
 
 ## 5. Unity Camera Trajectory Emulator
 
-**Module:** `unity_emulator/controller_v3.cs`  
+**Module:** `unity_emulator/`  
 **Runs on:** Unity workstation
+
+> **Virtual scene not included:** The virtual environments (warehouse and fire station scenes) used for dataset synthesis constitute a Unity project exceeding 10 GB and cannot be conveniently distributed in this repository. The scripts in `unity_emulator/` are provided as-is and require the scene project to be built or imported separately before they can be used.
+
+The `unity_emulator/` directory contains three C# scripts with distinct roles:
+
+| File | Role |
+|---|---|
+| `controller_v3.cs` | Production trajectory replay controller for dataset generation |
+| `controller_v2.cs` | Earlier per-agent trajectory controller with interactive FPS mode |
+| `frame_extractor.cs` | Scene verification utility for testing render quality during setup |
 
 ### Requirements
 
 - **Unity 2022.3.46 LTS**
 - **High Definition Render Pipeline (HDRP)** — install via the Unity Package Manager
 
-### Setup
+### controller_v3.cs — Production Trajectory Replay
 
-1. Create a new Unity HDRP project and import or build the virtual environment scenes used in your study.
+This is the primary script used for dataset generation. It reads recorded field-study trajectories and drives the camera along them at exactly 30 fps, capturing one PNG frame per interpolation step. It is described in full in the [Running the Full System](#running-the-full-system) section.
 
-2. For each agent (e.g. Human Agent 1, Human Agent 2, Robot), create a GameObject with:
+**Setup:**
+
+1. Create a new Unity HDRP project and import the virtual environment scenes.
+
+2. For each agent (Human Agent 1, Human Agent 2, Robot), create a GameObject with:
    - A `Camera` component
-   - `CameraPoseController.cs` attached
+   - `CameraPoseController.cs` (`controller_v3.cs`) attached
 
-3. Assign the pose `.txt` file as the **Pose Data File** (`TextAsset`) in the Inspector.
+3. Assign the Vicon pose `.txt` file as the **Pose Data File** (`TextAsset`) in the Inspector.
 
    **Pose file format** — space-separated, one pose per line:
    ```
    timestamp  qx  qy  qz  qw  px  py  pz
    ```
-   The source coordinate frame is assumed to be ROS/ENU right-handed (X-forward, Y-left, Z-up). The script converts to Unity's left-handed frame automatically. If your source data uses a different convention, adjust the two lines marked `COORDINATE CONVERSION` in `ParsePoseData()`.
+   The source coordinate frame is ROS/ENU right-handed (X-forward, Y-left, Z-up). The script converts to Unity's left-handed frame automatically. If your source data uses a different convention, adjust the two lines marked `COORDINATE CONVERSION` in `ParsePoseData()`.
 
-4. Leave **Save Directory** empty — it will auto-name from the GameObject name, ensuring each agent saves frames to a separate folder.
+4. Leave **Save Directory** empty — it auto-names from the GameObject name, ensuring each agent's frames go to a separate folder (e.g. `HumanAgent1/`, `Robot/`).
 
-5. Set **Target Frame Rate** to `30` to match the field-study recording rate.
+5. Set **Target Frame Rate** to `30`.
 
-6. Ensure **Use Relative Positioning** is **unchecked** (false) for dataset generation.
+6. Ensure **Use Relative Positioning** is **unchecked** (false). This flag is only for live AR deployment where cameras start from different Unity scene positions; for dataset generation the camera must follow the exact recorded trajectory.
+
+7. Press Play. Frames are written to `Application.persistentDataPath/<GameObjectName>/{timestamp:F6}.png`. The six-decimal timestamp filename is required for `pyslam_integration.py`'s `process_sequence()` to correctly pair frames with ground-truth poses.
+
+**Keyboard controls in Play mode:**
+
+| Key | Action |
+|---|---|
+| `P` | Play / Pause |
+| `R` | Restart from beginning |
+| `O` | Recalculate relative pose offset (only relevant when `useRelativePositioning` is true) |
+| `T` | Toggle relative positioning mode |
+
+### controller_v2.cs — Per-Agent Interactive and Replay Controller
+
+This is an earlier agent-specific controller for the human agent. It is kept in the repository as a reference implementation. It operates in two modes, selected by the **Use Controlled Translations** (`useControlledTranslations`) toggle in the Inspector:
+
+**Interactive FPS mode** (`useControlledTranslations = false`):  
+Standard first-person controller driven by WASD keys and mouse look. Includes sprint (`Left Shift`), jump (`Space`), and a head-bob effect. This mode is used to manually navigate the virtual scene for scene verification and framing checks.
+
+**Trajectory replay mode** (`useControlledTranslations = true`):  
+Reads a `.txt` TextAsset assigned in the Inspector, parses it as a sequence of `(timestamp, quaternion, position)` entries, and drives the camera along the trajectory using Slerp/Lerp interpolation timed to the recorded timestamps. WASD and mouse are disabled in this mode. Frames are saved to `pathToSaveData/frames/` numbered by frame index (e.g. `0.png`, `1.png`, ...).
+
+This script also applies per-agent layer culling: the human camera's culling mask excludes the `Human2` and `Robot` layers so each agent camera renders only its own view without seeing the other agents' scene objects.
+
+Inspector fields specific to trajectory replay mode:
+
+| Field | Description |
+|---|---|
+| `txtFile` | TextAsset containing the recorded pose sequence |
+| `pathToSaveData` | Absolute directory path where `frames/` will be created |
+| `saveCameraFrames` | Enable/disable frame saving during replay |
+| `startingCoordinateOffset` | World-space offset applied to all positions |
+| `useHighRes` | Enable high-resolution capture via RenderTexture |
+| `captureResMultiplier` | Resolution multiplier when `useHighRes` is true |
+| `useCustomRes` | Use fixed custom resolution instead of a multiplier |
+| `customCaptureWidth / Height` | Custom resolution dimensions |
+
+> **Note:** `controller_v2.cs` uses `float` for timestamps, which limits precision for large Unix timestamps. For production dataset generation use `controller_v3.cs`, which parses timestamps as `double`. Frame filenames in v2 are sequential integers (`0.png`, `1.png`, ...) rather than the floating-point timestamps required by `pyslam_integration.py`.
+
+### frame_extractor.cs — Scene Verification Utility
+
+This is a lightweight utility for verifying scene render quality during initial setup. It is **not** used for trajectory replay or dataset generation. Attach it to a camera in the scene and use it to check that HDRP lighting, asset placement, and post-processing look correct before running the full trajectory capture.
+
+**How it works:** The script detects camera movement by comparing position and rotation each frame. When the camera has been stationary for `movementStopDelay` seconds (default 0.5 s), it automatically captures a burst of `maxFramesToCapture` frames (default 3) and saves them to `Application.dataPath/<saveDirectory>/frame_XXXX.png`.
+
+Inspector fields:
+
+| Field | Default | Description |
+|---|---|---|
+| `saveDirectory` | `CapturedFrames` | Subdirectory name inside `Application.dataPath` |
+| `useHighResolution` | false | Use RenderTexture-based high-resolution capture |
+| `resolutionMultiplier` | 2 | Resolution multiplier when `useHighResolution` is true |
+| `maxFramesToCapture` | 3 | Number of frames to capture per stationary burst |
+| `movementStopDelay` | 0.5 s | Seconds of stillness before a burst is triggered |
+| `mouseSensitivity` | 2 | Mouse look sensitivity |
+| `maxLookAngle` | 90° | Maximum vertical look angle |
+
+Use mouse look to navigate the scene and pause at any viewpoint. The script will automatically capture frames after 0.5 s of stillness. Press `Escape` to toggle cursor lock.
 
 ---
 
