@@ -4,28 +4,6 @@ using UnityEngine;
 using System;
 using System.IO;
 
-/*
- * Camera Pose Controller - Fixed Version with Relative Positioning
- * 
- * Key fixes for the "stopping after one frame" issue:
- * 1. Fixed timestamp precision issue: Changed from float to double for timestamps
- *    - Large Unix timestamps (like 1749911387.520850) lose precision with float
- *    - This caused all timestamps to become identical, making duration = 0 seconds
- * 2. Changed timing logic from real-time matching to fixed timestep interpolation
- * 3. Moved frame capture outside the blocking coroutine call 
- * 4. Added frame rate limiting to prevent excessive capture attempts
- * 5. Improved error handling and debugging output
- * 6. Added progress monitoring and manual controls (P to play/pause, R to restart)
- * 7. Enhanced timestamp difference logging for debugging
- * 
- * NEW FEATURE - Relative Positioning:
- * 8. Added relative positioning system that allows each camera to follow the same
- *    trajectory pattern but starting from their current position/orientation
- * 9. When useRelativePositioning is enabled, the script calculates an offset between
- *    the current camera pose and the first pose in the data file
- * 10. This offset is then applied to all subsequent poses, making each camera follow
- *     the same movement pattern relative to their starting position
- */
 
 namespace CameraPoseController
 {
@@ -39,54 +17,65 @@ namespace CameraPoseController
         public TextAsset poseDataFile;
         public Vector3 startingCoordinateOffset = Vector3.zero;
         public bool autoStartOnPlay = true;
-        public bool useRelativePositioning = true; // New option to enable relative positioning
+
+        // Paper §5: for dataset generation the camera must follow the exact
+        // recorded trajectory.  Only set this true in the live AR deployment
+        // when cameras start from different Unity scene positions but must
+        // replay the same movement pattern.
+        public bool useRelativePositioning = false;
 
         [Header("Screenshot Settings")]
-        public string saveDirectory = "CameraFrames";
+        // Leave empty to auto-name from gameObject.name (recommended).
+        // This ensures each agent saves to its own directory with no manual
+        // configuration per camera.
+        public string saveDirectory = "";
         public bool saveCameraFrames = true;
-        public int targetFrameRate = 30;
-        
+        public int targetFrameRate = 30;    // 30 fps — matches field study recording rate
+
         [Header("High Resolution Capture")]
         public bool useHighResolution = false;
         public int resolutionMultiplier = 2;
         public bool useCustomResolution = false;
-        public int customWidth = 1920;
+        public int customWidth  = 1920;
         public int customHeight = 1080;
 
-        // Internal variables
+        // Internal state
         private bool isPlaying = false;
         private int currentIndex = 0;
         private List<PoseData> poseDataList = new List<PoseData>();
         private Coroutine poseUpdateCoroutine;
 
-        // Offset calculation variables
-        private Vector3 positionOffset = Vector3.zero;
-        private Quaternion rotationOffset = Quaternion.identity;
-        private bool offsetCalculated = false;
+        // Relative-positioning offset variables (used only when useRelativePositioning=true)
+        private Vector3    positionOffset  = Vector3.zero;
+        private Quaternion rotationOffset  = Quaternion.identity;
+        private bool       offsetCalculated = false;
 
-        // Public properties for monitoring
-        public bool IsPlaying => isPlaying;
-        public int CurrentPoseIndex => currentIndex;
-        public int TotalPoses => poseDataList.Count;
-        public float PlaybackProgress => poseDataList.Count > 0 ? (float)currentIndex / poseDataList.Count : 0f;
-        public Vector3 PositionOffset => positionOffset;
-        public Quaternion RotationOffset => rotationOffset;
-        public bool IsOffsetCalculated => offsetCalculated;
+        // Public monitoring properties
+        public bool  IsPlaying         => isPlaying;
+        public int   CurrentPoseIndex  => currentIndex;
+        public int   TotalPoses        => poseDataList.Count;
+        public float PlaybackProgress  => poseDataList.Count > 0
+                                          ? (float)currentIndex / poseDataList.Count : 0f;
+        public Vector3    PositionOffset     => positionOffset;
+        public Quaternion RotationOffset     => rotationOffset;
+        public bool       IsOffsetCalculated => offsetCalculated;
 
         [System.Serializable]
         private struct PoseData
         {
-            public double timestamp;
+            public double    timestamp;
             public Quaternion rotation;
-            public Vector3 position;
+            public Vector3    position;
         }
+
+        // ==================================================================
+        // Unity lifecycle
+        // ==================================================================
 
         private void Awake()
         {
-            // Initialize camera settings
             if (targetCamera == null)
                 targetCamera = GetComponent<Camera>();
-            
             if (targetCamera != null)
                 targetCamera.fieldOfView = fov;
         }
@@ -94,16 +83,27 @@ namespace CameraPoseController
         private void Start()
         {
             Application.targetFrameRate = targetFrameRate;
-            Debug.Log($"[{gameObject.name}] Camera Pose Controller started. Target FPS: {targetFrameRate}");
-            
+
+            // Auto-name save directory from the GameObject name so that each
+            // agent camera (User1, User2, Robot) saves to its own folder.
+            if (string.IsNullOrEmpty(saveDirectory))
+            {
+                saveDirectory = gameObject.name;
+                Debug.Log($"[{gameObject.name}] Save directory set to: {saveDirectory}");
+            }
+
+            Debug.Log($"[{gameObject.name}] Camera Pose Controller started. "
+                    + $"Target FPS: {targetFrameRate}, "
+                    + $"Relative positioning: {useRelativePositioning}");
+
             if (poseDataFile != null)
             {
                 Debug.Log($"[{gameObject.name}] Parsing pose data file: {poseDataFile.name}");
                 ParsePoseData();
-                
+
                 if (autoStartOnPlay && poseDataList.Count > 0)
                 {
-                    Debug.Log($"[{gameObject.name}] Auto-starting pose playback with {poseDataList.Count} poses");
+                    Debug.Log($"[{gameObject.name}] Auto-starting with {poseDataList.Count} poses");
                     StartPosePlayback();
                 }
                 else if (poseDataList.Count == 0)
@@ -119,137 +119,124 @@ namespace CameraPoseController
 
         private void Update()
         {
-            // Debug key controls (optional)
             if (Input.GetKeyDown(KeyCode.P))
             {
-                if (isPlaying)
-                    StopPosePlayback();
-                else
-                    StartPosePlayback();
+                if (isPlaying) StopPosePlayback();
+                else           StartPosePlayback();
             }
-            
-            if (Input.GetKeyDown(KeyCode.R))
-            {
-                RestartPlayback();
-            }
-
-            if (Input.GetKeyDown(KeyCode.O))
-            {
-                RecalculatePoseOffset();
-            }
-
-            if (Input.GetKeyDown(KeyCode.T))
-            {
-                ToggleRelativePositioning();
-            }
+            if (Input.GetKeyDown(KeyCode.R)) RestartPlayback();
+            if (Input.GetKeyDown(KeyCode.O)) RecalculatePoseOffset();
+            if (Input.GetKeyDown(KeyCode.T)) ToggleRelativePositioning();
         }
 
+        // ==================================================================
+        // Pose data parsing
+        // ==================================================================
+
         /// <summary>
-        /// Parse the pose data from the txt file
-        /// Expected format: timestamp qx qy qz qw px py pz
-        /// Note: If your data format is different (e.g., timestamp px py pz qx qy qz qw), 
-        /// adjust the parsing order below accordingly.
+        /// Parse the pose data .txt file.
+        ///
+        /// Expected format: space-separated, one pose per line:
+        ///     timestamp  qx  qy  qz  qw  px  py  pz
+        ///
+        /// Coordinate conversion (applied per line):
+        ///   Input:  ROS/ENU right-handed (X-forward, Y-left, Z-up)
+        ///           — this is the convention of the Vicon ground-truth files
+        ///             used in the SHARE field study.
+        ///   Output: Unity left-handed    (X-right, Y-up, Z-forward)
+        ///   Transform: rotation = new Quaternion(qx, -qy, qz, qw)
+        ///              position = new Vector3(-px, pz, py)
+        ///
+        /// If your source data uses a different frame, adjust the two lines
+        /// marked "COORDINATE CONVERSION" below.
+        ///
+        /// Note: timestamps are parsed as double (not float) because large Unix
+        /// timestamps (e.g. 1749911387.520850) exceed float precision and would
+        /// collapse all poses to the same timestamp, producing zero-duration
+        /// intervals and stopping playback after the first frame.
         /// </summary>
         private void ParsePoseData()
         {
             if (poseDataFile == null)
             {
-                Debug.LogError("No pose data file assigned!");
+                Debug.LogError($"[{gameObject.name}] No pose data file assigned!");
                 return;
             }
 
             poseDataList.Clear();
             string[] lines = poseDataFile.text.Split('\n');
-            
-            Debug.Log($"[{gameObject.name}] Parsing {lines.Length} lines from pose data file");
-            
+            Debug.Log($"[{gameObject.name}] Parsing {lines.Length} lines");
+
             foreach (string line in lines)
             {
-                // Skip empty lines
-                if (string.IsNullOrWhiteSpace(line))
-                    continue;
-                    
+                if (string.IsNullOrWhiteSpace(line)) continue;
                 string[] data = line.Trim().Split(' ');
-                
-                // Ensure we have exactly 8 values: timestamp + 4 quaternion + 3 position
+
                 if (data.Length == 8)
                 {
                     try
                     {
-                        // Parse according to format: timestamp qx qy qz qw px py pz
-                        // IMPORTANT: Adjust this parsing order if your data format is different!
-                        double timestamp = double.Parse(data[0]);
-                        
-                        // Quaternion components (x, y, z, w)
+                        double ts = double.Parse(data[0]);
+
                         float qx = float.Parse(data[1]);
                         float qy = float.Parse(data[2]);
                         float qz = float.Parse(data[3]);
                         float qw = float.Parse(data[4]);
-                        
-                        // Position components (x, y, z)
                         float px = float.Parse(data[5]);
                         float py = float.Parse(data[6]);
                         float pz = float.Parse(data[7]);
-                        
-                        // Apply coordinate system transformation if needed
-                        // Adjust these transformations based on your coordinate system
+
+                        // COORDINATE CONVERSION: ROS/ENU → Unity left-handed
                         Quaternion rotation = new Quaternion(qx, -qy, qz, qw);
-                        Vector3 position = new Vector3(-px, pz, py) + startingCoordinateOffset;
-                        
-                        PoseData poseData = new PoseData
-                        {
-                            timestamp = timestamp,
-                            rotation = rotation,
-                            position = position
-                        };
-                        
-                        poseDataList.Add(poseData);
-                        
-                        // Debug first few entries to verify parsing
+                        Vector3    position = new Vector3(-px, pz, py) + startingCoordinateOffset;
+
+                        poseDataList.Add(new PoseData {
+                            timestamp = ts,
+                            rotation  = rotation,
+                            position  = position,
+                        });
+
                         if (poseDataList.Count <= 3)
                         {
-                            Debug.Log($"[{gameObject.name}] Parsed entry {poseDataList.Count}: " +
-                                     $"timestamp={timestamp:F6}, " +
-                                     $"quat=({qx:F6},{qy:F6},{qz:F6},{qw:F6}), " +
-                                     $"pos=({px:F6},{py:F6},{pz:F6})");
+                            Debug.Log($"[{gameObject.name}] Entry {poseDataList.Count}: "
+                                    + $"ts={ts:F6}, "
+                                    + $"q=({qx:F4},{qy:F4},{qz:F4},{qw:F4}), "
+                                    + $"p=({px:F4},{py:F4},{pz:F4})");
                         }
                     }
-                    catch (System.FormatException e)
+                    catch (FormatException e)
                     {
-                        Debug.LogWarning($"Failed to parse line: {line}. Error: {e.Message}");
+                        Debug.LogWarning($"[{gameObject.name}] Parse error: {line} — {e.Message}");
                     }
                 }
                 else
                 {
-                    Debug.LogWarning($"Invalid data format in line: {line}. Expected 8 values, got {data.Length}");
+                    Debug.LogWarning($"[{gameObject.name}] Expected 8 values, got {data.Length}: {line}");
                 }
             }
-            
-            Debug.Log($"[{gameObject.name}] Parsed {poseDataList.Count} pose data entries");
-            
+
+            Debug.Log($"[{gameObject.name}] Parsed {poseDataList.Count} poses");
+
             if (poseDataList.Count > 1)
             {
-                double firstTimestamp = poseDataList[0].timestamp;
-                double lastTimestamp = poseDataList[poseDataList.Count - 1].timestamp;
-                double totalDuration = lastTimestamp - firstTimestamp;
-                Debug.Log($"[{gameObject.name}] Pose data spans {totalDuration:F6} seconds (from {firstTimestamp:F6} to {lastTimestamp:F6})");
-                
-                // Check average time between poses
-                double avgTimeDiff = totalDuration / (poseDataList.Count - 1);
-                Debug.Log($"[{gameObject.name}] Average time between poses: {avgTimeDiff:F6} seconds");
-                
-                // Show first few timestamp differences for debugging
+                double t0   = poseDataList[0].timestamp;
+                double tN   = poseDataList[poseDataList.Count - 1].timestamp;
+                double dur  = tN - t0;
+                double avg  = dur / (poseDataList.Count - 1);
+                Debug.Log($"[{gameObject.name}] Duration: {dur:F3}s  avg Δt: {avg:F6}s");
+
                 for (int i = 0; i < Math.Min(5, poseDataList.Count - 1); i++)
                 {
                     double diff = poseDataList[i + 1].timestamp - poseDataList[i].timestamp;
-                    Debug.Log($"[{gameObject.name}] Time diff {i}: {diff:F6} seconds");
+                    Debug.Log($"[{gameObject.name}] Δt[{i}] = {diff:F6}s");
                 }
             }
         }
 
-        /// <summary>
-        /// Start the pose playback
-        /// </summary>
+        // ==================================================================
+        // Playback control
+        // ==================================================================
+
         public void StartPosePlayback()
         {
             if (poseDataList.Count == 0)
@@ -257,276 +244,153 @@ namespace CameraPoseController
                 Debug.LogWarning($"[{gameObject.name}] No pose data to play!");
                 return;
             }
-
             if (isPlaying)
             {
-                Debug.LogWarning($"[{gameObject.name}] Pose playback already in progress!");
+                Debug.LogWarning($"[{gameObject.name}] Playback already running!");
                 return;
             }
 
-            // Calculate offset between current camera pose and first pose in data
             if (useRelativePositioning)
-            {
                 CalculatePoseOffset();
-            }
             else
             {
-                // Reset offsets if not using relative positioning
-                positionOffset = Vector3.zero;
-                rotationOffset = Quaternion.identity;
+                positionOffset   = Vector3.zero;
+                rotationOffset   = Quaternion.identity;
                 offsetCalculated = true;
             }
 
-            isPlaying = true;
-            currentIndex = 0;
-            
+            isPlaying     = true;
+            currentIndex  = 0;
+
             if (poseUpdateCoroutine != null)
                 StopCoroutine(poseUpdateCoroutine);
-            
+
             poseUpdateCoroutine = StartCoroutine(UpdateCameraPoseRoutine());
-            Debug.Log($"[{gameObject.name}] Started camera pose playback with {poseDataList.Count} poses. Save frames: {saveCameraFrames}. Relative positioning: {useRelativePositioning}");
+            Debug.Log($"[{gameObject.name}] Playback started — {poseDataList.Count} poses, "
+                    + $"saveCameraFrames={saveCameraFrames}, "
+                    + $"useRelativePositioning={useRelativePositioning}");
         }
 
-        /// <summary>
-        /// Calculate the offset between current camera pose and first pose in the data
-        /// </summary>
-        private void CalculatePoseOffset()
-        {
-            if (poseDataList.Count == 0 || targetCamera == null)
-            {
-                Debug.LogError($"[{gameObject.name}] Cannot calculate pose offset - no data or camera!");
-                return;
-            }
-
-            // Get current camera pose
-            Vector3 currentPosition = targetCamera.transform.position;
-            Quaternion currentRotation = targetCamera.transform.rotation;
-
-            // Get first pose from data
-            PoseData firstPose = poseDataList[0];
-
-            // Calculate position offset
-            positionOffset = currentPosition - firstPose.position;
-
-            // Calculate rotation offset 
-            // This is the rotation needed to go from first pose rotation to current rotation
-            rotationOffset = currentRotation * Quaternion.Inverse(firstPose.rotation);
-
-            offsetCalculated = true;
-
-            Debug.Log($"[{gameObject.name}] Calculated pose offset:");
-            Debug.Log($"  Current position: {currentPosition}");
-            Debug.Log($"  First data position: {firstPose.position}");
-            Debug.Log($"  Position offset: {positionOffset}");
-            Debug.Log($"  Current rotation: {currentRotation.eulerAngles}");
-            Debug.Log($"  First data rotation: {firstPose.rotation.eulerAngles}");
-            Debug.Log($"  Rotation offset: {rotationOffset.eulerAngles}");
-        }
-
-        /// <summary>
-        /// Stop the pose playback
-        /// </summary>
         public void StopPosePlayback()
         {
             isPlaying = false;
-            
             if (poseUpdateCoroutine != null)
             {
                 StopCoroutine(poseUpdateCoroutine);
                 poseUpdateCoroutine = null;
             }
-            
-            Debug.Log($"[{gameObject.name}] Stopped camera pose playback");
+            Debug.Log($"[{gameObject.name}] Playback stopped");
         }
 
-        /// <summary>
-        /// Reset the pose offset calculation
-        /// </summary>
-        public void ResetPoseOffset()
+        public void RestartPlayback()
         {
-            positionOffset = Vector3.zero;
-            rotationOffset = Quaternion.identity;
-            offsetCalculated = false;
-            Debug.Log($"[{gameObject.name}] Reset pose offset");
+            StopPosePlayback();
+            if (useRelativePositioning) ResetPoseOffset();
+            StartPosePlayback();
         }
 
-        /// <summary>
-        /// Manually recalculate the pose offset based on current camera position
-        /// </summary>
-        [ContextMenu("Recalculate Pose Offset")]
-        public void RecalculatePoseOffset()
-        {
-            if (useRelativePositioning)
-            {
-                CalculatePoseOffset();
-            }
-            else
-            {
-                Debug.LogWarning($"[{gameObject.name}] Relative positioning is disabled");
-            }
-        }
+        // ==================================================================
+        // Main coroutine
+        // ==================================================================
 
         /// <summary>
-        /// Coroutine that updates camera pose over time
+        /// Drives the camera along the recorded trajectory.
+        ///
+        /// For each consecutive pose pair (i, i+1):
+        ///   1. Compute interpolationSteps = round(Δt / frameTime).
+        ///   2. Loop step = 0 .. interpolationSteps-1  (EXCLUSIVE upper bound
+        ///      to avoid duplicating the boundary pose at the start of the
+        ///      next interval).
+        ///   3. Set camera transform from interpolated pose.
+        ///   4. Capture exactly ONE frame per step — no wall-clock gating.
+        ///      The coroutine waits frameTime seconds between steps, so the
+        ///      output frame rate exactly matches targetFrameRate.
         /// </summary>
         private IEnumerator UpdateCameraPoseRoutine()
         {
-            float lastCaptureTime = 0f;
-            float captureInterval = 1f / targetFrameRate; // Time between captures for target FPS
-            
-            Debug.Log($"Starting pose playback with {poseDataList.Count} poses");
-            
+            float frameTime = 1f / targetFrameRate;
+
+            Debug.Log($"[{gameObject.name}] Coroutine started — {poseDataList.Count} poses, "
+                    + $"frameTime={frameTime:F4}s");
+
             while (currentIndex < poseDataList.Count - 1 && isPlaying)
             {
-                PoseData currentPose = poseDataList[currentIndex];
-                PoseData nextPose = poseDataList[currentIndex + 1];
+                PoseData cur  = poseDataList[currentIndex];
+                PoseData next = poseDataList[currentIndex + 1];
 
-                // Calculate time difference between poses (using double precision)
-                double timeDifference = nextPose.timestamp - currentPose.timestamp;
-                
-                // Handle edge cases
-                if (timeDifference <= 0.0 || double.IsNaN(timeDifference) || double.IsInfinity(timeDifference))
+                double dt = next.timestamp - cur.timestamp;
+
+                // Skip degenerate intervals (zero or negative Δt)
+                if (dt <= 0.0 || double.IsNaN(dt) || double.IsInfinity(dt))
                 {
-                    Debug.LogWarning($"Invalid time difference at index {currentIndex}: {timeDifference}. Moving to next pose.");
-                    
-                    // Set pose directly and move to next
-                    SetCameraPose(nextPose);
+                    Debug.LogWarning($"[{gameObject.name}] Invalid Δt={dt:F6} at index "
+                                   + $"{currentIndex}; skipping to next pose");
+                    SetCameraPose(next);
                     currentIndex++;
                     continue;
                 }
 
-                // Use a fixed time step for smooth playback instead of real-time matching
-                float frameTime = 1f / targetFrameRate;
-                int interpolationSteps = Mathf.Max(1, Mathf.RoundToInt((float)timeDifference / frameTime));
-                
-                Debug.Log($"[{gameObject.name}] Processing pose {currentIndex}: time diff = {timeDifference:F6}s, steps = {interpolationSteps}");
-                
-                for (int step = 0; step <= interpolationSteps && isPlaying; step++)
+                // Number of frames to emit between these two keyframes.
+                int steps = Mathf.Max(1, Mathf.RoundToInt((float)dt / frameTime));
+
+                // Throttled log (every 100 poses to avoid overhead)
+                if (currentIndex % 100 == 0)
+                    Debug.Log($"[{gameObject.name}] Pose {currentIndex}/{poseDataList.Count - 1}  "
+                            + $"Δt={dt:F4}s  steps={steps}");
+
+                // EXCLUSIVE upper bound: step 0 .. steps-1
+                // At step=0:     t=0 → current pose
+                // At step=steps: t=1 → next pose  (emitted as step=0 of the NEXT interval)
+                // This prevents one duplicated frame at every keyframe boundary.
+                for (int step = 0; step < steps && isPlaying; step++)
                 {
-                    float t = (float)step / interpolationSteps;
+                    float t = (float)step / steps;
                     t = Mathf.Clamp01(t);
 
-                    // Get interpolated pose with offset applied
-                    GetAdjustedInterpolatedPose(currentPose, nextPose, t, out Vector3 interpolatedPosition, out Quaternion interpolatedRotation);
-                    
-                    // Validate and apply pose
-                    if (IsValidPose(interpolatedRotation, interpolatedPosition))
+                    GetAdjustedInterpolatedPose(cur, next, t,
+                                               out Vector3    pos,
+                                               out Quaternion rot);
+
+                    if (IsValidPose(rot, pos))
                     {
-                        targetCamera.transform.rotation = interpolatedRotation;
-                        targetCamera.transform.position = interpolatedPosition;
+                        targetCamera.transform.position = pos;
+                        targetCamera.transform.rotation = rot;
                     }
 
-                    // Capture frame at target framerate
-                    if (saveCameraFrames && Time.time - lastCaptureTime >= captureInterval)
+                    // Capture one frame per interpolation step.
+                    // No wall-clock gating — the coroutine already advances at
+                    // exactly frameTime seconds per step, so this produces
+                    // exactly targetFrameRate frames per second.
+                    if (saveCameraFrames)
                     {
-                        // Use interpolated timestamp
-                        double interpolatedTimestamp = currentPose.timestamp + (nextPose.timestamp - currentPose.timestamp) * t;
-                        StartCoroutine(CaptureFrame(interpolatedTimestamp));
-                        lastCaptureTime = Time.time;
+                        double interpTs = cur.timestamp + dt * t;
+                        StartCoroutine(CaptureFrame(interpTs));
                     }
 
-                    // Wait for next frame
                     yield return new WaitForSeconds(frameTime);
                 }
 
                 currentIndex++;
-                Debug.Log($"Processed pose {currentIndex}/{poseDataList.Count}");
             }
-            
-            // Set final pose
+
+            // Emit the final pose of the trajectory
             if (currentIndex < poseDataList.Count)
             {
                 SetCameraPose(poseDataList[currentIndex]);
                 if (saveCameraFrames)
-                {
                     StartCoroutine(CaptureFrame(poseDataList[currentIndex].timestamp));
-                }
             }
 
             isPlaying = false;
-            Debug.Log("Camera pose playback completed successfully");
+            Debug.Log($"[{gameObject.name}] Playback complete");
         }
 
-        /// <summary>
-        /// Set camera pose directly
-        /// </summary>
-        private void SetCameraPose(PoseData pose)
-        {
-            PoseData adjustedPose = ApplyPoseOffset(pose);
-            
-            if (IsValidPose(adjustedPose.rotation, adjustedPose.position))
-            {
-                targetCamera.transform.rotation = adjustedPose.rotation;
-                targetCamera.transform.position = adjustedPose.position;
-            }
-        }
+        // ==================================================================
+        // Frame capture
+        // ==================================================================
 
         /// <summary>
-        /// Apply the calculated offset to a pose
-        /// </summary>
-        private PoseData ApplyPoseOffset(PoseData originalPose)
-        {
-            if (!offsetCalculated)
-            {
-                Debug.LogWarning($"[{gameObject.name}] Offset not calculated yet, using original pose");
-                return originalPose;
-            }
-
-            PoseData adjustedPose = new PoseData();
-            adjustedPose.timestamp = originalPose.timestamp;
-            
-            // Apply position offset
-            adjustedPose.position = originalPose.position + positionOffset;
-            
-            // Apply rotation offset
-            adjustedPose.rotation = rotationOffset * originalPose.rotation;
-            
-            return adjustedPose;
-        }
-
-        /// <summary>
-        /// Get an adjusted pose with offset applied (for interpolation)
-        /// </summary>
-        private void GetAdjustedInterpolatedPose(PoseData currentPose, PoseData nextPose, float t, out Vector3 position, out Quaternion rotation)
-        {
-            // First interpolate between original poses
-            Vector3 interpolatedPosition = Vector3.Lerp(currentPose.position, nextPose.position, t);
-            Quaternion interpolatedRotation = Quaternion.Slerp(currentPose.rotation, nextPose.rotation, t);
-            
-            // Then apply offset
-            if (offsetCalculated)
-            {
-                position = interpolatedPosition + positionOffset;
-                rotation = rotationOffset * interpolatedRotation;
-            }
-            else
-            {
-                position = interpolatedPosition;
-                rotation = interpolatedRotation;
-            }
-        }
-
-        /// <summary>
-        /// Validate pose data for NaN values
-        /// </summary>
-        private bool IsValidPose(Quaternion rotation, Vector3 position)
-        {
-            bool rotationValid = !float.IsNaN(rotation.x) && !float.IsNaN(rotation.y) && 
-                                !float.IsNaN(rotation.z) && !float.IsNaN(rotation.w);
-            
-            bool positionValid = !float.IsNaN(position.x) && !float.IsNaN(position.y) && !float.IsNaN(position.z);
-            
-            if (!rotationValid)
-                Debug.LogError($"Invalid rotation detected: {rotation}");
-            
-            if (!positionValid)
-                Debug.LogError($"Invalid position detected: {position}");
-            
-            return rotationValid && positionValid;
-        }
-
-        /// <summary>
-        /// Capture a screenshot frame
+        /// Capture and save one PNG frame after the current render completes.
         /// </summary>
         private IEnumerator CaptureFrame(double timestamp)
         {
@@ -534,136 +398,204 @@ namespace CameraPoseController
 
             try
             {
-                Texture2D screenshot = useHighResolution ? CaptureHighResolutionScreenshot() : CaptureStandardScreenshot();
-                
-                // Create save directory
-                string directoryPath = Path.Combine(Application.persistentDataPath, saveDirectory);
+                Texture2D screenshot = useHighResolution
+                    ? CaptureHighResolutionScreenshot()
+                    : CaptureStandardScreenshot();
+
+                string directoryPath = Path.Combine(
+                    Application.persistentDataPath, saveDirectory);
+
                 if (!Directory.Exists(directoryPath))
                 {
                     Directory.CreateDirectory(directoryPath);
-                    Debug.Log($"Created directory: {directoryPath}");
+                    Debug.Log($"[{gameObject.name}] Created directory: {directoryPath}");
                 }
-                
-                // Save with timestamp as filename (using double precision)
+
+                // Filename = timestamp to 6 decimal places, matching the naming
+                // convention expected by pyslam_integration.py's process_sequence().
                 string filename = $"{timestamp:F6}.png";
                 string filePath = Path.Combine(directoryPath, filename);
-                
+
                 byte[] imageBytes = screenshot.EncodeToPNG();
                 File.WriteAllBytes(filePath, imageBytes);
-                
-                // Cleanup
                 DestroyImmediate(screenshot);
-                
-                Debug.Log($"[{gameObject.name}] Frame saved: {filename} to {directoryPath}");
             }
-            catch (System.Exception e)
+            catch (Exception e)
             {
-                Debug.LogError($"[{gameObject.name}] Failed to capture frame: {e.Message}");
+                Debug.LogError($"[{gameObject.name}] Frame capture failed: {e.Message}");
             }
         }
 
         /// <summary>
-        /// Capture high resolution screenshot
+        /// Capture at screen resolution by rendering explicitly from targetCamera.
+        ///
+        /// This method mirrors the high-resolution path: both paths render
+        /// from targetCamera into a RenderTexture so the captured image is
+        /// always the correct camera view, regardless of whether the Unity
+        /// editor window is focused or other cameras are active.
+        ///
+        /// The original ReadPixels-from-display approach was replaced because
+        /// it reads from the active display framebuffer, not from targetCamera,
+        /// which produces wrong images when the window is minimised or when
+        /// multiple cameras are rendering to the same display.
+        /// </summary>
+        private Texture2D CaptureStandardScreenshot()
+        {
+            int width  = Screen.width;
+            int height = Screen.height;
+
+            RenderTexture  rt             = new RenderTexture(width, height, 24);
+            RenderTexture  originalTarget = targetCamera.targetTexture;
+
+            targetCamera.targetTexture = rt;
+            targetCamera.Render();
+
+            RenderTexture.active = rt;
+            Texture2D screenshot = new Texture2D(width, height, TextureFormat.RGB24, false);
+            screenshot.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+            screenshot.Apply();
+
+            targetCamera.targetTexture = originalTarget;
+            RenderTexture.active       = null;
+            DestroyImmediate(rt);
+
+            return screenshot;
+        }
+
+        /// <summary>
+        /// Capture at high or custom resolution.
         /// </summary>
         private Texture2D CaptureHighResolutionScreenshot()
         {
             int width, height;
-            
             if (useCustomResolution)
             {
-                width = customWidth;
+                width  = customWidth;
                 height = customHeight;
             }
             else
             {
-                width = Screen.width * resolutionMultiplier;
+                width  = Screen.width  * resolutionMultiplier;
                 height = Screen.height * resolutionMultiplier;
             }
 
-            RenderTexture renderTexture = new RenderTexture(width, height, 24);
-            renderTexture.antiAliasing = 8;
-            
-            // Store original settings
+            RenderTexture rt = new RenderTexture(width, height, 24);
+            rt.antiAliasing  = 8;
+
             RenderTexture originalTarget = targetCamera.targetTexture;
-            
-            // Render to high resolution texture
-            targetCamera.targetTexture = renderTexture;
+
+            targetCamera.targetTexture = rt;
             targetCamera.Render();
-            
-            // Read pixels
-            RenderTexture.active = renderTexture;
+
+            RenderTexture.active = rt;
             Texture2D screenshot = new Texture2D(width, height, TextureFormat.RGB24, false);
             screenshot.ReadPixels(new Rect(0, 0, width, height), 0, 0);
             screenshot.Apply();
-            
-            // Restore settings
+
             targetCamera.targetTexture = originalTarget;
-            RenderTexture.active = null;
-            DestroyImmediate(renderTexture);
-            
+            RenderTexture.active       = null;
+            DestroyImmediate(rt);
+
             return screenshot;
         }
 
-        /// <summary>
-        /// Capture standard resolution screenshot
-        /// </summary>
-        private Texture2D CaptureStandardScreenshot()
-        {
-            int width = Screen.width;
-            int height = Screen.height;
-            
-            Texture2D screenshot = new Texture2D(width, height, TextureFormat.RGB24, false);
-            screenshot.ReadPixels(new Rect(0, 0, width, height), 0, 0);
-            screenshot.Apply();
-            
-            return screenshot;
-        }
+        // ==================================================================
+        // Pose helpers
+        // ==================================================================
 
-        /// <summary>
-        /// Public method to restart playback
-        /// </summary>
-        public void RestartPlayback()
+        private void SetCameraPose(PoseData pose)
         {
-            StopPosePlayback();
-            
-            // Reset offset calculation so it recalculates from current position
-            if (useRelativePositioning)
+            PoseData adj = ApplyPoseOffset(pose);
+            if (IsValidPose(adj.rotation, adj.position))
             {
-                ResetPoseOffset();
+                targetCamera.transform.rotation = adj.rotation;
+                targetCamera.transform.position = adj.position;
             }
-            
-            StartPosePlayback();
         }
 
-        // Editor/Debug methods
-        [ContextMenu("Parse Pose Data")]
-        public void ParsePoseDataFromEditor()
+        private void GetAdjustedInterpolatedPose(PoseData a, PoseData b, float t,
+                                                  out Vector3    position,
+                                                  out Quaternion rotation)
         {
-            ParsePoseData();
+            Vector3    interPos = Vector3.Lerp(a.position, b.position, t);
+            Quaternion interRot = Quaternion.Slerp(a.rotation, b.rotation, t);
+
+            if (offsetCalculated)
+            {
+                position = interPos + positionOffset;
+                rotation = rotationOffset * interRot;
+            }
+            else
+            {
+                position = interPos;
+                rotation = interRot;
+            }
         }
 
-        [ContextMenu("Start Playback")]
-        public void StartPlaybackFromEditor()
+        private PoseData ApplyPoseOffset(PoseData pose)
         {
-            StartPosePlayback();
+            if (!offsetCalculated)
+            {
+                Debug.LogWarning($"[{gameObject.name}] Offset not calculated; using raw pose");
+                return pose;
+            }
+            return new PoseData {
+                timestamp = pose.timestamp,
+                position  = pose.position + positionOffset,
+                rotation  = rotationOffset * pose.rotation,
+            };
         }
 
-        [ContextMenu("Stop Playback")]
-        public void StopPlaybackFromEditor()
+        private bool IsValidPose(Quaternion rotation, Vector3 position)
         {
-            StopPosePlayback();
+            bool rotOk = !float.IsNaN(rotation.x) && !float.IsNaN(rotation.y)
+                      && !float.IsNaN(rotation.z) && !float.IsNaN(rotation.w);
+            bool posOk = !float.IsNaN(position.x) && !float.IsNaN(position.y)
+                      && !float.IsNaN(position.z);
+
+            if (!rotOk) Debug.LogError($"[{gameObject.name}] NaN rotation: {rotation}");
+            if (!posOk) Debug.LogError($"[{gameObject.name}] NaN position: {position}");
+            return rotOk && posOk;
         }
 
-        [ContextMenu("Recalculate Offset")]
-        public void RecalculateOffsetFromEditor()
+        // ==================================================================
+        // Relative positioning (live deployment only, not for dataset gen)
+        // ==================================================================
+
+        private void CalculatePoseOffset()
         {
-            RecalculatePoseOffset();
+            if (poseDataList.Count == 0 || targetCamera == null)
+            {
+                Debug.LogError($"[{gameObject.name}] Cannot calculate offset — no data or camera");
+                return;
+            }
+
+            Vector3    curPos = targetCamera.transform.position;
+            Quaternion curRot = targetCamera.transform.rotation;
+            PoseData   first  = poseDataList[0];
+
+            positionOffset   = curPos - first.position;
+            rotationOffset   = curRot * Quaternion.Inverse(first.rotation);
+            offsetCalculated = true;
+
+            Debug.Log($"[{gameObject.name}] Pose offset calculated:");
+            Debug.Log($"  position offset: {positionOffset}");
+            Debug.Log($"  rotation offset: {rotationOffset.eulerAngles}");
         }
 
-        [ContextMenu("Reset Offset")]
-        public void ResetOffsetFromEditor()
+        public void ResetPoseOffset()
         {
-            ResetPoseOffset();
+            positionOffset   = Vector3.zero;
+            rotationOffset   = Quaternion.identity;
+            offsetCalculated = false;
+            Debug.Log($"[{gameObject.name}] Pose offset reset");
+        }
+
+        [ContextMenu("Recalculate Pose Offset")]
+        public void RecalculatePoseOffset()
+        {
+            if (useRelativePositioning) CalculatePoseOffset();
+            else Debug.LogWarning($"[{gameObject.name}] Relative positioning is disabled");
         }
 
         [ContextMenu("Toggle Relative Positioning")]
@@ -671,11 +603,26 @@ namespace CameraPoseController
         {
             useRelativePositioning = !useRelativePositioning;
             Debug.Log($"[{gameObject.name}] Relative positioning: {useRelativePositioning}");
-            
-            if (useRelativePositioning)
-            {
-                ResetPoseOffset();
-            }
+            if (useRelativePositioning) ResetPoseOffset();
         }
+
+        // ==================================================================
+        // Editor context menu shortcuts
+        // ==================================================================
+
+        [ContextMenu("Parse Pose Data")]
+        public void ParsePoseDataFromEditor() => ParsePoseData();
+
+        [ContextMenu("Start Playback")]
+        public void StartPlaybackFromEditor() => StartPosePlayback();
+
+        [ContextMenu("Stop Playback")]
+        public void StopPlaybackFromEditor() => StopPosePlayback();
+
+        [ContextMenu("Restart Playback")]
+        public void RestartPlaybackFromEditor() => RestartPlayback();
+
+        [ContextMenu("Reset Offset")]
+        public void ResetOffsetFromEditor() => ResetPoseOffset();
     }
 }
