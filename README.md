@@ -13,10 +13,11 @@ SHARE is a multi-agent SLAM system that optimises the quality of experience (QoE
 5. [Monitoring Server](#3-monitoring-server)
 6. [Vicon Data Collection Server](#4-vicon-data-collection-server)
 7. [Unity Camera Trajectory Emulator](#5-unity-camera-trajectory-emulator)
-8. [Running the Full System](#running-the-full-system)
-9. [Credits](#credits)
-10. [Citation](#citation)
-11. [License](#license)
+8. [Robot Agent: LXC Container Setup](#6-robot-agent-lxc-container-setup)
+9. [Running the Full System](#running-the-full-system)
+10. [Credits](#credits)
+11. [Citation](#citation)
+12. [License](#license)
 
 ---
 
@@ -610,11 +611,11 @@ Once all agent devices have registered and finished synchronisation, issue comma
 
 > **Virtual scene not included:** The virtual environments (warehouse and fire station scenes) used for dataset synthesis constitute a Unity project exceeding 10 GB and cannot be conveniently distributed in this repository. The scripts in `unity_emulator/` are provided as-is and require the scene project to be built or imported separately before they can be used.
 
-The `unity_emulator/` directory contains two C# scripts with distinct roles:
+The `unity_emulator/` directory contains three C# scripts with distinct roles:
 
 | File | Role |
 |---|---|
-| `controller_v3.cs` | Production trajectory replay controller for dataset generation |
+| `controller_v3.cs` | Trajectory replay controller for dataset generation |
 | `frame_extractor.cs` | Scene verification utility for testing render quality during setup |
 
 ### Requirements
@@ -659,10 +660,9 @@ This is the primary script used for dataset generation. It reads recorded field-
 | `O` | Recalculate relative pose offset (only relevant when `useRelativePositioning` is true) |
 | `T` | Toggle relative positioning mode |
 
-
 ### frame_extractor.cs — Scene Verification Utility
 
-This is a lightweight utility for verifying scene render quality during initial setup and manual scene inspection. It is **not** used for trajectory replay or dataset generation. Attach it to a camera in the scene and use it to check that HDRP lighting, asset placement, and post-processing look correct before running the full trajectory capture.
+This is a lightweight utility for verifying scene render quality during initial setup. It is **not** used for trajectory replay or dataset generation. Attach it to a camera in the scene and use it to check that HDRP lighting, asset placement, and post-processing look correct before running the full trajectory capture.
 
 **How it works:** The script detects camera movement by comparing position and rotation each frame. When the camera has been stationary for `movementStopDelay` seconds (default 0.5 s), it automatically captures a burst of `maxFramesToCapture` frames (default 3) and saves them to `Application.dataPath/<saveDirectory>/frame_XXXX.png`.
 
@@ -679,6 +679,76 @@ Inspector fields:
 | `maxLookAngle` | 90° | Maximum vertical look angle |
 
 Use mouse look to navigate the scene and pause at any viewpoint. The script will automatically capture frames after 0.5 s of stillness. Press `Escape` to toggle cursor lock.
+
+---
+
+## 6. Robot Agent: LXC Container Setup
+
+**Runs on:** Robot (TurtleBot 4)
+
+The TurtleBot 4 ships with Ubuntu 22.04 and ROS 2 Humble. COVINS-G requires Ubuntu 20.04 and ROS Noetic. To run the COVINS-G frontend on the robot without replacing the host OS, an LXC (Linux Container) running Ubuntu 20.04 is used. The robot's native ROS 2 stack continues to operate on the host for hardware drivers while the COVINS-G frontend runs inside the container.
+
+### Installing LXC on the robot host
+
+```bash
+sudo apt install lxd
+sudo lxd init    # accept defaults; set storage backend to 'dir' if ZFS is unavailable
+```
+
+Add your user to the `lxd` group so you can manage containers without sudo:
+
+```bash
+sudo usermod -aG lxd $USER
+newgrp lxd
+```
+
+### Creating the Ubuntu 20.04 container
+
+```bash
+lxc launch ubuntu:20.04 ubuntu20
+```
+
+Wait for the container to initialise, then verify it is running:
+
+```bash
+lxc list
+```
+
+### Entering the container
+
+```bash
+lxc exec ubuntu20 -- bash
+```
+
+All subsequent COVINS-G installation steps (ROS Noetic, catkin workspace, COVINS-G build) are performed **inside this container** following Section 1 of this README, using the agent-only build:
+
+```bash
+# Inside the container
+./src/covins/install_file.sh -o 8    # ORB-SLAM3 frontend only
+# or
+./src/covins/install_file.sh -f 8    # ROS frontend wrapper
+```
+
+### Mounting USB storage inside the container
+
+Dataset files stored on a USB drive must be made accessible inside the container. If the USB drive was unplugged and re-attached, mount it on the host first:
+
+```bash
+# On the robot host (not inside the container)
+sudo mount /dev/sda1 /mnt/usb
+```
+
+Then attach the mounted path into the container. This step is only needed if the device has not been added before or was removed:
+
+```bash
+lxc config device add ubuntu20 usbdrive disk source=/mnt/usb path=/mnt/usb
+```
+
+The dataset files are then accessible at `/mnt/usb` inside the container.
+
+### Opening multiple terminals in the container
+
+Each of the following run steps for the robot (DNN Evaluator and COVINS-G Frontend) requires its own terminal inside the container. SSH into the robot and run `lxc exec ubuntu20 -- bash` in separate SSH sessions or terminal tabs to obtain independent container shells.
 
 ---
 
