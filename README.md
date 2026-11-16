@@ -26,7 +26,6 @@ generated using [pySLAM](https://github.com/luigifreda/pyslam).
 
 In the published evaluation, SHARE achieved **13.22 ms average latency for AR users** (a **43.3% reduction** from the baseline) while maintaining **sub-2-cm tracking accuracy**, with user-study results showing statistically significant improvements in perceived experience. See the [paper](https://doi.org/10.1145/3832004) for experimental details.
 
-main-system_page-0001.jpg
 <p align="center">
   <img src="main-system_page-0001.jpg" alt="SHARE system architecture showing collaborative SLAM among AR users, robots, and an edge server" width="90%">
 </p>
